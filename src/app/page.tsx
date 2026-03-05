@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { DEFAULT_MODEL, DEFAULT_ASPECT_RATIO, MAX_PROMPT_LENGTH, MAX_BATCH_SIZE, CONCURRENCY_LIMIT } from "@/lib/constants";
+import { DEFAULT_MODEL, DEFAULT_ASPECT_RATIO, MAX_PROMPT_LENGTH, MAX_BATCH_SIZE } from "@/lib/constants";
 import type {
   GeminiModel,
   AspectRatio,
@@ -53,15 +53,20 @@ export default function Home() {
     [model, aspectRatio]
   );
 
-  // Generate a single image with retry logic for rate limits
+  // Generate a single image with retry logic for rate limits and 503s
   const generateWithRetry = useCallback(
-    async (prompt: string, apiKey?: string, maxRetries = 4) => {
+    async (prompt: string, apiKey?: string, maxRetries = 5) => {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         const data = await generateSingleImage(prompt, apiKey);
 
-        // If rate limited and we have retries left, wait and retry
-        if (!data.success && data.code === "RATE_LIMIT" && attempt < maxRetries) {
-          const delay = Math.pow(2, attempt + 1) * 2000; // 4s, 8s, 16s, 32s
+        // If rate limited / unavailable and we have retries left, wait and retry
+        if (
+          !data.success &&
+          data.code === "RATE_LIMIT" &&
+          attempt < maxRetries
+        ) {
+          // Wait 10s, 20s, 30s, 40s, 50s — linear backoff, generous waits
+          const delay = (attempt + 1) * 10000;
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
@@ -69,8 +74,11 @@ export default function Home() {
         return data;
       }
 
-      // Should not reach here, but just in case
-      return { success: false as const, error: "Max retries exceeded", code: "RATE_LIMIT" as const };
+      return {
+        success: false as const,
+        error: "Max retries exceeded — still rate limited.",
+        code: "RATE_LIMIT" as const,
+      };
     },
     [generateSingleImage]
   );
@@ -103,65 +111,46 @@ export default function Home() {
     const batchErrors: string[] = [];
     const apiKey = userApiKey.trim() || undefined;
 
-    // Process prompts with concurrency limit to avoid rate limiting.
-    // Workers pull from a shared queue; each waits a cooldown after
-    // finishing a request before grabbing the next one.
-    const queue = promptList.map((prompt, index) => ({ prompt, index }));
-    let cursor = 0;
+    // Process prompts ONE AT A TIME — sequential to respect free-tier rate limits.
+    // Each generation takes 15-30s which naturally spaces out requests.
+    for (let i = 0; i < promptList.length; i++) {
+      const prompt = promptList[i];
 
-    async function processNext(): Promise<void> {
-      while (cursor < queue.length) {
-        const current = queue[cursor];
-        cursor++;
+      try {
+        const data = await generateWithRetry(prompt, apiKey);
 
-        try {
-          const data = await generateWithRetry(current.prompt, apiKey);
-
-          if (!data.success) {
-            batchErrors.push(
-              `#${current.index + 1} "${current.prompt.slice(0, 40)}...": ${data.error}`
-            );
-            setProgress((prev) =>
-              prev ? { ...prev, errors: prev.errors + 1 } : null
-            );
-          } else {
-            const newImage: GeneratedImage = {
-              id: crypto.randomUUID(),
-              base64: data.image.base64,
-              mimeType: data.image.mimeType,
-              prompt: data.prompt,
-              model: data.model,
-              aspectRatio: data.aspectRatio,
-              generatedAt: new Date(data.generatedAt),
-            };
-
-            setImages((prev) => [newImage, ...prev]);
-            setProgress((prev) =>
-              prev ? { ...prev, completed: prev.completed + 1 } : null
-            );
-          }
-        } catch {
+        if (!data.success) {
           batchErrors.push(
-            `#${current.index + 1} "${current.prompt.slice(0, 40)}...": Network error`
+            `#${i + 1} "${prompt.slice(0, 40)}...": ${data.error}`
           );
           setProgress((prev) =>
             prev ? { ...prev, errors: prev.errors + 1 } : null
           );
-        }
+        } else {
+          const newImage: GeneratedImage = {
+            id: crypto.randomUUID(),
+            base64: data.image.base64,
+            mimeType: data.image.mimeType,
+            prompt: data.prompt,
+            model: data.model,
+            aspectRatio: data.aspectRatio,
+            generatedAt: new Date(data.generatedAt),
+          };
 
-        // Cooldown before picking up the next prompt to stay under rate limits
-        if (cursor < queue.length) {
-          await new Promise((r) => setTimeout(r, 2000));
+          setImages((prev) => [newImage, ...prev]);
+          setProgress((prev) =>
+            prev ? { ...prev, completed: prev.completed + 1 } : null
+          );
         }
+      } catch {
+        batchErrors.push(
+          `#${i + 1} "${prompt.slice(0, 40)}...": Network error`
+        );
+        setProgress((prev) =>
+          prev ? { ...prev, errors: prev.errors + 1 } : null
+        );
       }
     }
-
-    // Launch N workers that pull from the shared queue
-    const workers = Array.from(
-      { length: Math.min(CONCURRENCY_LIMIT, promptList.length) },
-      () => processNext()
-    );
-    await Promise.allSettled(workers);
 
     if (batchErrors.length > 0) {
       setErrors(batchErrors);

@@ -65,7 +65,11 @@ export async function POST(
     if (
       message.includes("429") ||
       message.includes("rate") ||
-      message.includes("quota")
+      message.includes("quota") ||
+      message.includes("503") ||
+      message.includes("UNAVAILABLE") ||
+      message.includes("overloaded") ||
+      message.includes("RESOURCE_EXHAUSTED")
     ) {
       return NextResponse.json(
         {
