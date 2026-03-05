@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { DEFAULT_MODEL, DEFAULT_ASPECT_RATIO, MAX_PROMPT_LENGTH, MAX_BATCH_SIZE } from "@/lib/constants";
+import { DEFAULT_MODEL, DEFAULT_ASPECT_RATIO, MAX_PROMPT_LENGTH, MAX_BATCH_SIZE, CONCURRENCY_LIMIT } from "@/lib/constants";
 import type {
   GeminiModel,
   AspectRatio,
@@ -53,6 +53,28 @@ export default function Home() {
     [model, aspectRatio]
   );
 
+  // Generate a single image with retry logic for rate limits
+  const generateWithRetry = useCallback(
+    async (prompt: string, apiKey?: string, maxRetries = 3) => {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const data = await generateSingleImage(prompt, apiKey);
+
+        // If rate limited and we have retries left, wait and retry
+        if (!data.success && data.code === "RATE_LIMIT" && attempt < maxRetries) {
+          const delay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+
+        return data;
+      }
+
+      // Should not reach here, but just in case
+      return { success: false as const, error: "Max retries exceeded", code: "RATE_LIMIT" as const };
+    },
+    [generateSingleImage]
+  );
+
   async function handleGenerate() {
     const prefix = stylePrefix.trim();
     const promptList = prompts
@@ -81,45 +103,64 @@ export default function Home() {
     const batchErrors: string[] = [];
     const apiKey = userApiKey.trim() || undefined;
 
-    // Fire all prompts in parallel using Promise.allSettled
-    const promises = promptList.map(async (prompt, index) => {
-      try {
-        const data = await generateSingleImage(prompt, apiKey);
+    // Process prompts with concurrency limit to avoid rate limiting
+    const queue = promptList.map((prompt, index) => ({ prompt, index }));
+    let cursor = 0;
 
-        if (!data.success) {
-          batchErrors.push(`#${index + 1} "${prompt.slice(0, 40)}...": ${data.error}`);
+    async function processNext(): Promise<void> {
+      while (cursor < queue.length) {
+        const current = queue[cursor];
+        cursor++;
+
+        // Stagger launches slightly to avoid burst
+        if (current.index > 0) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+
+        try {
+          const data = await generateWithRetry(current.prompt, apiKey);
+
+          if (!data.success) {
+            batchErrors.push(
+              `#${current.index + 1} "${current.prompt.slice(0, 40)}...": ${data.error}`
+            );
+            setProgress((prev) =>
+              prev ? { ...prev, errors: prev.errors + 1 } : null
+            );
+            continue;
+          }
+
+          const newImage: GeneratedImage = {
+            id: crypto.randomUUID(),
+            base64: data.image.base64,
+            mimeType: data.image.mimeType,
+            prompt: data.prompt,
+            model: data.model,
+            aspectRatio: data.aspectRatio,
+            generatedAt: new Date(data.generatedAt),
+          };
+
+          setImages((prev) => [newImage, ...prev]);
+          setProgress((prev) =>
+            prev ? { ...prev, completed: prev.completed + 1 } : null
+          );
+        } catch {
+          batchErrors.push(
+            `#${current.index + 1} "${current.prompt.slice(0, 40)}...": Network error`
+          );
           setProgress((prev) =>
             prev ? { ...prev, errors: prev.errors + 1 } : null
           );
-          return;
         }
-
-        // Image completed — add it to gallery immediately
-        const newImage: GeneratedImage = {
-          id: crypto.randomUUID(),
-          base64: data.image.base64,
-          mimeType: data.image.mimeType,
-          prompt: data.prompt,
-          model: data.model,
-          aspectRatio: data.aspectRatio,
-          generatedAt: new Date(data.generatedAt),
-        };
-
-        setImages((prev) => [newImage, ...prev]);
-        setProgress((prev) =>
-          prev ? { ...prev, completed: prev.completed + 1 } : null
-        );
-      } catch {
-        batchErrors.push(
-          `#${index + 1} "${prompt.slice(0, 40)}...": Network error`
-        );
-        setProgress((prev) =>
-          prev ? { ...prev, errors: prev.errors + 1 } : null
-        );
       }
-    });
+    }
 
-    await Promise.allSettled(promises);
+    // Launch N workers that pull from the shared queue
+    const workers = Array.from(
+      { length: Math.min(CONCURRENCY_LIMIT, promptList.length) },
+      () => processNext()
+    );
+    await Promise.allSettled(workers);
 
     if (batchErrors.length > 0) {
       setErrors(batchErrors);
