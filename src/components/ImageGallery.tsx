@@ -16,7 +16,7 @@ export default function ImageGallery({ images }: ImageGalleryProps) {
           No images yet
         </h3>
         <p className="mt-1 text-sm text-gray-500">
-          Enter a prompt above and click Generate to create your first image.
+          Enter prompts above (one per line) and click Generate to batch-create images.
         </p>
       </div>
     );
