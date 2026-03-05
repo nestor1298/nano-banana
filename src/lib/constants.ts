@@ -34,6 +34,6 @@ export const DEFAULT_MODEL: GeminiModel = "gemini-3.1-flash-image-preview";
 export const DEFAULT_ASPECT_RATIO: AspectRatio = "1:1";
 export const MAX_PROMPT_LENGTH = 2000;
 export const MAX_BATCH_SIZE = 20;
-export const CONCURRENCY_LIMIT = 3; // Max parallel API calls to avoid rate limiting
+export const CONCURRENCY_LIMIT = 2; // Max parallel API calls to avoid rate limiting
 export const PROMPT_PLACEHOLDER =
   "Enter one prompt per line for batch generation...\n\nExample:\nA cinematic wide shot of an astronaut on the moon\nA cozy cabin in the snowy mountains at sunset\nA golden retriever wearing an astronaut suit on Mars";

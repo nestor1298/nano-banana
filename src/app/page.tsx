@@ -55,13 +55,13 @@ export default function Home() {
 
   // Generate a single image with retry logic for rate limits
   const generateWithRetry = useCallback(
-    async (prompt: string, apiKey?: string, maxRetries = 3) => {
+    async (prompt: string, apiKey?: string, maxRetries = 4) => {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         const data = await generateSingleImage(prompt, apiKey);
 
         // If rate limited and we have retries left, wait and retry
         if (!data.success && data.code === "RATE_LIMIT" && attempt < maxRetries) {
-          const delay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+          const delay = Math.pow(2, attempt + 1) * 2000; // 4s, 8s, 16s, 32s
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
@@ -103,7 +103,9 @@ export default function Home() {
     const batchErrors: string[] = [];
     const apiKey = userApiKey.trim() || undefined;
 
-    // Process prompts with concurrency limit to avoid rate limiting
+    // Process prompts with concurrency limit to avoid rate limiting.
+    // Workers pull from a shared queue; each waits a cooldown after
+    // finishing a request before grabbing the next one.
     const queue = promptList.map((prompt, index) => ({ prompt, index }));
     let cursor = 0;
 
@@ -111,11 +113,6 @@ export default function Home() {
       while (cursor < queue.length) {
         const current = queue[cursor];
         cursor++;
-
-        // Stagger launches slightly to avoid burst
-        if (current.index > 0) {
-          await new Promise((r) => setTimeout(r, 500));
-        }
 
         try {
           const data = await generateWithRetry(current.prompt, apiKey);
@@ -127,23 +124,22 @@ export default function Home() {
             setProgress((prev) =>
               prev ? { ...prev, errors: prev.errors + 1 } : null
             );
-            continue;
+          } else {
+            const newImage: GeneratedImage = {
+              id: crypto.randomUUID(),
+              base64: data.image.base64,
+              mimeType: data.image.mimeType,
+              prompt: data.prompt,
+              model: data.model,
+              aspectRatio: data.aspectRatio,
+              generatedAt: new Date(data.generatedAt),
+            };
+
+            setImages((prev) => [newImage, ...prev]);
+            setProgress((prev) =>
+              prev ? { ...prev, completed: prev.completed + 1 } : null
+            );
           }
-
-          const newImage: GeneratedImage = {
-            id: crypto.randomUUID(),
-            base64: data.image.base64,
-            mimeType: data.image.mimeType,
-            prompt: data.prompt,
-            model: data.model,
-            aspectRatio: data.aspectRatio,
-            generatedAt: new Date(data.generatedAt),
-          };
-
-          setImages((prev) => [newImage, ...prev]);
-          setProgress((prev) =>
-            prev ? { ...prev, completed: prev.completed + 1 } : null
-          );
         } catch {
           batchErrors.push(
             `#${current.index + 1} "${current.prompt.slice(0, 40)}...": Network error`
@@ -151,6 +147,11 @@ export default function Home() {
           setProgress((prev) =>
             prev ? { ...prev, errors: prev.errors + 1 } : null
           );
+        }
+
+        // Cooldown before picking up the next prompt to stay under rate limits
+        if (cursor < queue.length) {
+          await new Promise((r) => setTimeout(r, 2000));
         }
       }
     }
