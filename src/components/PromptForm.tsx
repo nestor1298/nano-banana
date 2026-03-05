@@ -6,6 +6,8 @@ import ModelSelector from "./ModelSelector";
 import AspectRatioPicker from "./AspectRatioPicker";
 
 interface PromptFormProps {
+  stylePrefix: string;
+  onStylePrefixChange: (value: string) => void;
   prompts: string;
   onPromptsChange: (value: string) => void;
   model: GeminiModel;
@@ -25,6 +27,8 @@ function getPromptCount(text: string): number {
 }
 
 export default function PromptForm({
+  stylePrefix,
+  onStylePrefixChange,
   prompts,
   onPromptsChange,
   model,
@@ -50,6 +54,30 @@ export default function PromptForm({
   return (
     <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
       <div className="flex flex-col gap-4">
+        {/* Style / concept prefix */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="style-prefix"
+            className="text-sm font-medium text-gray-300"
+          >
+            Style &amp; Concept{" "}
+            <span className="text-gray-500">(prepended to every prompt)</span>
+          </label>
+          <input
+            id="style-prefix"
+            type="text"
+            value={stylePrefix}
+            onChange={(e) => onStylePrefixChange(e.target.value)}
+            placeholder="e.g. Cinematic 4K, moody lighting, film grain, wide angle"
+            className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-gray-100 placeholder-gray-500 focus:border-yellow-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/20"
+          />
+          {stylePrefix.trim() && (
+            <p className="text-xs text-yellow-500/70">
+              Each prompt will start with: <span className="font-medium text-yellow-400">&quot;{stylePrefix.trim()}, </span>...&quot;
+            </p>
+          )}
+        </div>
+
         {/* Prompt textarea */}
         <div className="flex flex-col gap-1.5">
           <label

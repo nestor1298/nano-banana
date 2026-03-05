@@ -15,6 +15,7 @@ import PromptForm from "@/components/PromptForm";
 import ImageGallery from "@/components/ImageGallery";
 
 export default function Home() {
+  const [stylePrefix, setStylePrefix] = useState("");
   const [prompts, setPrompts] = useState("");
   const [model, setModel] = useState<GeminiModel>(DEFAULT_MODEL);
   const [aspectRatio, setAspectRatio] =
@@ -53,10 +54,12 @@ export default function Home() {
   );
 
   async function handleGenerate() {
+    const prefix = stylePrefix.trim();
     const promptList = prompts
       .split("\n")
       .map((l) => l.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .map((p) => (prefix ? `${prefix}, ${p}` : p));
 
     if (promptList.length === 0 || isGenerating) return;
     if (promptList.length > MAX_BATCH_SIZE) return;
@@ -139,6 +142,8 @@ export default function Home() {
 
       <main className="mx-auto max-w-5xl px-4 py-8">
         <PromptForm
+          stylePrefix={stylePrefix}
+          onStylePrefixChange={setStylePrefix}
           prompts={prompts}
           onPromptsChange={setPrompts}
           model={model}
